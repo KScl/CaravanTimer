@@ -1,0 +1,3 @@
+If present, savestates here will be used when starting caravan runs.
+
+The expected filename is "romname.caravan.fc"
