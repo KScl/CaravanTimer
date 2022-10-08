@@ -3,8 +3,9 @@ require "gd"
 local timer = {value = 0, state = "not ready", savestate = nil, screenshot = "null.png"}
 local game_data = {}
 
--- ---------------------------------------------------------------------------------------------------------------------------------- --
+-- ========================================================================= --
 -- Additional memory management functions
+-- ========================================================================= --
 function convert_bcd(bcd)
 	local num = 0
 	local pos = 1
@@ -42,10 +43,10 @@ memory.readsword = function(addr) return read_arbitrary(addr, 3) end
 memory.readword_le  = function(addr) return read_arbitrary_le(addr, 2) end
 memory.readsword_le = function(addr) return read_arbitrary_le(addr, 3) end
 memory.readdword_le = function(addr) return read_arbitrary_le(addr, 4) end
--- ---------------------------------------------------------------------------------------------------------------------------------- --
 
--- ---------------------------------------------------------------------------------------------------------------------------------- --
+-- ========================================================================= --
 -- List of games that require special attention
+-- ========================================================================= --
 local gamedb = {}
 gamedb.games = {}
 function gamedb.get(game)
@@ -59,8 +60,9 @@ function gamedb.get(game)
 	return data
 end
 
-gamedb.games["md_contraj"] = {scorefunc = function() return memory.readdword(0xFFFA00) end}
 gamedb.games["md_contra"] = {scorefunc = function() return memory.readdword(0xFFFA00) end}
+gamedb.games["md_contraj"] = gamedb.games["md_contra"]
+gamedb.games["md_probot"] = gamedb.games["md_contra"]
 gamedb.games["md_sparkstru"] = {scorefunc = function() return memory.readbcdword(0xFFAD34) * 100 end}
 gamedb.games["nes_wreckingcrew"] = {scorefunc = function() return memory.readbcdword(0x0085) * 100 end}
 gamedb.games["nes_kidicarus"] = {scorefunc = function() return memory.readsword_le(0x0131) + memory.readsword_le(0x0144) end}
@@ -75,10 +77,10 @@ gamedb.games["nes_legendarywings"] = {scorefunc = function()
 	for i = 2, 8 do v = (v * 10) + b[i] end
 	return v
 end}
--- ---------------------------------------------------------------------------------------------------------------------------------- --
 
--- ---------------------------------------------------------------------------------------------------------------------------------- --
+-- ========================================================================= --
 -- This is the font that the timer and score displays use!
+-- ========================================================================= --
 ksfont = {}
 ksfont.image = {}
 do
@@ -129,29 +131,41 @@ function ksfont.draw_horiz(x, y, str, color)
 	end
 	str:gsub(".", drawchar)
 end
--- ---------------------------------------------------------------------------------------------------------------------------------- --
--- Called on game change to update game data + reset timer
 
-function kstimer_startup()
+-- ========================================================================= --
+-- Hooks, etc.
+-- ========================================================================= --
+
+-- Called when moving to a new game or starting the script for the first time
+-- Sets game info and readies timer
+function onstartup()
 	name = fba.romname()
 	game_data = gamedb.get(name)
 
-	local screenshot = "screenshot/" .. name .. ".png"
-	local savestate = "states/" .. name .. ".caravan.fs"
-	local savestate_check = io.open(savestate)
+	timer.value = game_data.duration
+	timer.state = "ready"
+	timer.screenshot = "screenshot/" .. name .. ".png"
+	timer.savestate = "states/" .. name .. ".caravan.fs"
+
+	-- Confirm savestate exists
+	local savestate_check = io.open(timer.savestate)
 	if savestate_check ~= nil then
 		io.close(savestate_check)
 	else
-		savestate = nil
+		timer.savestate = nil
+	end
+end
+emu.registerstart(onstartup)
+
+-- HUD displayed on screen
+function onhudupdate()
+	-- Screenshot taking needs to be in the UI to accurately get the final frame
+	-- (if it's in the main loop, it gets the frame before the pause happens)
+	if request_screenshot then
+		gd.createFromGdStr(gui.gdscreenshot()):png(timer.screenshot)
+		request_screenshot = false
 	end
 
-	timer = {value = game_data.duration, state = "ready", savestate = savestate, screenshot = screenshot}
-end
-emu.registerstart(kstimer_startup)
-
--- ---------------------------------------------------------------------------------------------------------------------------------- --
--- HUD displayed on screen
-function kstimer_hud()
 	local remain = timer.value
 	if remain >= 360000 then
 		remain = 359999
@@ -187,10 +201,10 @@ function kstimer_hud()
 	ksfont.draw_horiz(fba.screenwidth()-96, 0, string.format("<  %2d'%02d\"%02d ", mins, secs, centi), color)
 	gui.text(fba.screenwidth()-88, 1, "TIME", color)
 end
-gui.register(kstimer_hud)
--- ---------------------------------------------------------------------------------------------------------------------------------- --
+gui.register(onhudupdate)
 
-function kstimer_hotkey1()
+-- Stop/Restart hotkey
+function onhotkey1()
 	-- End timer if running
 	if timer.state == "running" then
 		timer.state = "ending"
@@ -202,10 +216,11 @@ function kstimer_hotkey1()
 		timer.value = game_data.duration
 	end
 end
-input.registerhotkey(1, kstimer_hotkey1)
+input.registerhotkey(1, onhotkey1)
 
--- ---------------------------------------------------------------------------------------------------------------------------------- --
+-- ========================================================================= --
 -- Timer main loop
+-- ========================================================================= --
 while true do
 	if timer.state == "ready" then
 		if joypad.read()["P1 Start"] == true then
@@ -221,11 +236,13 @@ while true do
 			timer.state = "ending"
 		end
 	elseif timer.state == "ending" then
-		-- Run is over (not a reset)
-		gd.createFromGdStr(gui.gdscreenshot()):png(timer.screenshot)
+		-- This must be handled in the main loop due to the pause.
+		-- But the screenshot needs to be done after the pause, so we have to do it in the gui callback.
+		request_screenshot = true
 		fba.pause()
+
+		-- Will show information about restarting after the game is unpaused.
 		timer.state = "ended"
 	end
 	emu.frameadvance()
 end
--- ---------------------------------------------------------------------------------------------------------------------------------- --
